@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Color Analyzer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .color-box {
+            width: 40px;
+            height: 40px;
+            border: 1px solid #ccc;
+            margin-right: 5px;
+            display: inline-block;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 p-6">
+    <div class="max-w-4xl mx-auto bg-white rounded-lg shadow-md p-6">
+        <h1 class="text-2xl font-bold mb-4">Image Color Quantizer</h1>
+
+        <input type="file" id="imageInput" accept="image/*" class="mb-4">
+        <div class="flex flex-col sm:flex-row sm:space-x-4 space-y-4 sm:space-y-0 mb-4">
+            <div class="flex-1">
+                <label for="bitDepth" class="block mb-1 font-medium">Bit Depth</label>
+                <input type="range" id="bitDepth" min="1" max="8" value="4" class="w-full">
+                <div class="text-sm text-gray-600" id="bitDepthValue">4-bit (16 colors)</div>
+            </div>
+            <div class="flex-1">
+                <label for="tolerance" class="block mb-1 font-medium">Color Tolerance</label>
+                <input type="range" id="tolerance" min="1" max="128" value="32" class="w-full">
+                <div class="text-sm text-gray-600" id="toleranceValue">32</div>
+            </div>
+        </div>
+
+        <label class="inline-flex items-center mb-4">
+            <input type="checkbox" id="toggleOriginal" class="mr-2">
+            Show Original Image
+        </label>
+
+        <img id="imagePreview" class="max-w-full rounded shadow mb-4" />
+        <h2 class="text-xl font-semibold mb-2">Detected Colors</h2>
+        <div id="colorPalette" class="flex flex-wrap gap-2"></div>
+    </div>
+
+    <script>
+        const imageInput = document.getElementById('imageInput');
+        const imagePreview = document.getElementById('imagePreview');
+        const bitDepthInput = document.getElementById('bitDepth');
+        const toleranceInput = document.getElementById('tolerance');
+        const bitDepthValue = document.getElementById('bitDepthValue');
+        const toleranceValue = document.getElementById('toleranceValue');
+        const colorPalette = document.getElementById('colorPalette');
+        const toggleOriginal = document.getElementById('toggleOriginal');
+
+        let originalImage = null;
+        let originalCanvasDataURL = null;
+        let originalBitDepth = 8;
+
+        imageInput.addEventListener('change', e => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(event) {
+                const img = new Image();
+                img.onload = () => {
+                    originalImage = img;
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    ctx.drawImage(img, 0, 0);
+                    originalCanvasDataURL = canvas.toDataURL();
+                    toggleOriginal.checked = false;
+                    processImage();
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
+
+        bitDepthInput.addEventListener('input', () => {
+            const bitDepth = parseInt(bitDepthInput.value);
+            let colorCount = Math.pow(2, bitDepth);
+            bitDepthValue.textContent = `${bitDepth}-bit (${colorCount} colors)`;
+            if (!toggleOriginal.checked) processImage();
+        });
+
+        toleranceInput.addEventListener('input', () => {
+            toleranceValue.textContent = `${toleranceInput.value}`;
+            if (!toggleOriginal.checked) processImage();
+        });
+
+        toggleOriginal.addEventListener('change', () => {
+            if (toggleOriginal.checked) {
+                imagePreview.src = originalCanvasDataURL;
+            } else {
+                processImage();
+            }
+        });
+
+        function processImage() {
+            if (!originalImage) return;
+
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            canvas.width = originalImage.width;
+            canvas.height = originalImage.height;
+            ctx.drawImage(originalImage, 0, 0);
+
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const data = new Uint8ClampedArray(imageData.data);
+            const tolerance = parseInt(toleranceInput.value);
+            const bitDepth = parseInt(bitDepthInput.value);
+            const colorLevels = Math.pow(2, bitDepth);
+            const interval = 256 / colorLevels;
+
+            let maxChannelBit = 1;
+            const colorMap = {};
+
+            for (let i = 0; i < data.length; i += 4) {
+                // Apply color tolerance
+                const r = Math.floor(data[i] / tolerance) * tolerance;
+                const g = Math.floor(data[i + 1] / tolerance) * tolerance;
+                const b = Math.floor(data[i + 2] / tolerance) * tolerance;
+
+                // Quantize to the correct number of levels for the selected bit depth
+                let quantizedR = Math.round(r / interval) * interval;
+                let quantizedG = Math.round(g / interval) * interval;
+                let quantizedB = Math.round(b / interval) * interval;
+
+                if (bitDepth === 1) {
+                    // For 1-bit, force to black or white *based on original color*
+                    quantizedR = r < 128 ? 0 : 255;
+                    quantizedG = g < 128 ? 0 : 255;
+                    quantizedB = b < 128 ? 0 : 255;
+                }
+
+                data[i] = quantizedR;
+                data[i + 1] = quantizedG;
+                data[i + 2] = quantizedB;
+
+                maxChannelBit = Math.max(
+                    maxChannelBit,
+                    Math.ceil(Math.log2(data[i] + 1)),
+                    Math.ceil(Math.log2(data[i + 1] + 1)),
+                    Math.ceil(Math.log2(data[i + 2] + 1))
+                );
+
+                const key = `${data[i]}-${data[i + 1]}-${data[i + 2]}`;
+                if (colorMap[key]) {
+                    colorMap[key].count++;
+                } else {
+                    colorMap[key] = {
+                        count: 1,
+                        r: data[i],
+                        g: data[i + 1],
+                        b: data[i + 2],
+                    };
+                }
+            }
+
+            // Update slider max if needed
+            originalBitDepth = Math.max(originalBitDepth, maxChannelBit);
+            bitDepthInput.max = originalBitDepth;
+
+            ctx.putImageData(new ImageData(data, canvas.width, canvas.height), 0, 0);
+            imagePreview.src = canvas.toDataURL();
+
+            // Update palette
+            colorPalette.innerHTML = '';
+            const totalPixels = canvas.width * canvas.height;
+            const uniqueColors = Object.values(colorMap).length;
+
+            if (bitDepth === 1) {
+                displayBinaryPalette();
+            } else if (bitDepth === 2) {
+                display4ColorPalette();
+            } else if (bitDepth === 3) {
+                display8ColorPalette();
+            }
+             else if (bitDepth === 4) {
+                display16ColorPalette();
+            } else if (bitDepth === 5){
+                display32ColorPalette();
+            } else if (bitDepth === 6){
+                display64ColorPalette();
+            } else if (bitDepth === 7){
+                display128ColorPalette();
+            }
+            else {
+                display256ColorPalette(colorMap, totalPixels);
+            }
+        }
+        function displayBinaryPalette() {
+            colorPalette.innerHTML = '';
+            const binaryColors = [
+                { r: 0, g: 0, b: 0, name: 'Black' },
+                { r: 255, g: 255, b: 255, name: 'White' },
+            ];
+            const totalPixels= originalImage.width * originalImage.height;
+             binaryColors.forEach(color => {
+                const div = document.createElement('div');
+                div.className = 'flex flex-col items-center';
+                const swatch = document.createElement('div');
+                swatch.className = 'w-6 h-6 rounded shadow-sm';
+                swatch.style.backgroundColor = `rgb(${color.r},${color.g},${color.b})`;
+                const label = document.createElement('div');
+                label.className = 'text-xs text-center text-gray-600 mt-1';
+                label.textContent = color.name;
+                div.appendChild(swatch);
+                div.appendChild(label);
+                colorPalette.appendChild(div);
+            });
+        }
+
+        function display4ColorPalette() {
+            colorPalette.innerHTML = '';
+            const colors = [
+                { r: 0, g: 0, b: 0, name: 'Black' },
+                { r: 255, g: 0, b: 0, name: 'Red' },
+                { r: 0, g: 255, b: 0, name: 'Green' },
+                { r: 0, g: 0, b: 255, name: 'Blue' },
+            ];
+            const totalPixels= originalImage.width * originalImage.height;
+            colors.forEach(color => {
+                const div = document.createElement('div');
+                div.className = 'flex flex-col items-center';
+                const swatch = document.createElement('div');
+                swatch.className = 'w-6 h-6 rounded shadow-sm';
+                swatch.style.backgroundColor = `rgb(${color.r},${color.g},${color.b})`;
+                const label = document.createElement('div');
+                label.className = 'text-xs text-center text-gray-600 mt-1';
+                label.textContent = color.name;
+                div.appendChild(swatch);
+                div.appendChild(label);
+                colorPalette.appendChild(div);
+            });
+        }
+
+        function display8ColorPalette() {
+            colorPalette.innerHTML = '';
+            const colors = [
+                { r: 0, g: 0, b: 0, name: 'Black' },
+                { r: 255, g: 0, b: 0, name: 'Red' },
+                { r: 0, g: 255, b: 0, name: 'Green' },
+                { r: 0, g: 0, b: 255, name: 'Blue' },
+                { r: 255, g: 255, b: 0, name: 'Yellow' },
+                { r: 255, g: 0, b: 255, name: 'Magenta' },
+                { r: 0, g: 255, b: 255, name: 'Cyan' },
+                { r: 255, g: 255, b: 255, name: 'White' },
+            ];
+            const totalPixels = originalImage.width * originalImage.height;
+            colors.forEach(color => {
+                const div = document.createElement('div');
+                div.className = 'flex flex-col items-center';
+                const swatch = document.createElement('div');
+                swatch.className = 'w-6 h-6 rounded shadow-sm';
+                swatch.style.backgroundColor = `rgb(${color.r},${color.g},${color.b})`;
+                const label = document.createElement('div');
+                label.className = 'text-xs text-center text-gray-600 mt-1';
+                label.textContent = color.name;
+                div.appendChild(swatch);
+                div.appendChild(label);
+                colorPalette.appendChild(div);
+            });
+        }
+
+        function display16ColorPalette() {
+            colorPalette.innerHTML='';
+            const sixteenColors = [
+                { r: 0, g: 0, b: 0, name: 'Black' },
+                { r: 128, g: 0, b: 0, name: 'Maroon' },
+                { r: 0, g: 128, b: 0, name: 'Green' },
+                { r: 128, g: 128, b: 0, name: 'Olive' },
+                { r: 0, g: 0, b: 128, name: 'Navy' },
+                { r: 128, g: 0, b: 128, name: 'Purple' },
+                { r: 0, g: 128, b: 128, name: 'Teal' },
+                { r: 192, g: 192, b: 192, name: 'Silver' },
+                { r: 192, g: 192, b: 192, name: 'Gray' },
+                { r: 255, g: 0, b: 0, name: 'Red' },
+                { r: 0, g: 255, b: 0, name: 'Lime' },
+                { r: 255, g: 255, b: 0, name: 'Yellow' },
+                { r: 0, g: 0, b: 255, name: 'Blue' },
+                { r: 255, g: 0, b: 255, name: 'Fuchsia' },
+                { r: 0, g: 255, b: 255, name: 'Aqua' },
+                { r: 255, g: 255, b: 255, name: 'White' },
+            ];
+            const totalPixels = originalImage.width * originalImage.height;
+
+            sixteenColors.forEach(color => {
+                const div = document.createElement('div');
+                div.className = 'flex flex-col items-center';
+                const swatch = document.createElement('div');
+                swatch.className = 'w-6 h-6 rounded shadow-sm';
+                swatch.style.backgroundColor = `rgb(${color.r},${color.g},${color.b})`;
+                const label = document.createElement('div');
+                label.className = 'text-xs text-center text-gray-600 mt-1';
+                label.textContent = color.name;
+                div.appendChild(swatch);
+                div.appendChild(label);
+                colorPalette.appendChild(div);
+            });
+        }
+
+        function display32ColorPalette() {
+            colorPalette.innerHTML = '';
+            const colors = [];
+            for (let r = 0; r < 256; r += 64) {
+                for (let g = 0; g < 256; g += 64) {
+                    for (let b = 0; b < 256; b += 64) {
+                        colors.push({ r, g, b, name: `(${r},${g},${b})` });
+                    }
+                }
+            }
+            const totalPixels = originalImage.width * originalImage.height;
+            colors.forEach(color => {
+                const div = document.createElement('div');
+                div.className = 'flex flex-col items-center';
+                const swatch = document.createElement('div');
+                swatch.className = 'w-6 h-6 rounded shadow-sm';
+                swatch.style.backgroundColor = `rgb(${color.r},${color.g},${color.b})`;
+                const label = document.createElement('div');
+                label.className = 'text-xs text-center text-gray-600 mt-1';
+                label.textContent = color.name;
+                div.appendChild(swatch);
+                div.appendChild(label);
+                colorPalette.appendChild(div);
+            });
+        }
+
+        function display64ColorPalette() {
+            colorPalette.innerHTML = '';
+            const colors = [];
+            for (let r = 0; r < 256; r += 32) {
+                for (let g = 0; g < 256; g += 32) {
+                    for (let b = 0; b < 256; b += 64) {
+                        colors.push({ r, g, b, name: `(${r},${g},${b})` });
+                    }
+                }
+            }
+            const totalPixels = originalImage.width * originalImage.height;
+            colors.forEach(color => {
+                const div = document.createElement('div');
+                div.className = 'flex flex-col items-center';
+                const swatch = document.createElement('div');
+                swatch.className = 'w-6 h-6 rounded shadow-sm';
+                swatch.style.backgroundColor = `rgb(${color.r},${color.g},${color.b})`;
+                const label = document.createElement('div');
+                label.className = 'text-xs text-center text-gray-600 mt-1';
+                label.textContent = color.name;
+                div.appendChild(swatch);
+                div.appendChild(label);
+                colorPalette.appendChild(div);
+            });
+        }
+
+        function display128ColorPalette() {
+            colorPalette.innerHTML = '';
+            const colors = [];
+            for (let r = 0; r < 256; r += 32) {
+                for (let g = 0; g < 256; g += 32) {
+                    for (let b = 0; b < 256; b += 32) {
+                         colors.push({r,g,b, name: `(${r},${g},${b})`});
+                    }
+                }
+            }
+            const totalPixels = originalImage.width * originalImage.height;
+            colors.forEach(color => {
+                const div = document.createElement('div');
+                div.className = 'flex flex-col items-center';
+                const swatch = document.createElement('div');
+                swatch.className = 'w-6 h-6 rounded shadow-sm';
+                swatch.style.backgroundColor = `rgb(${color.r},${color.g},${color.b})`;
+                const label = document.createElement('div');
+                label.className = 'text-xs text-center text-gray-600 mt-1';
+                label.textContent = color.name;
+                div.appendChild(swatch);
+                div.appendChild(label);
+                colorPalette.appendChild(div);
+            });
+        }
+
+        function display256ColorPalette(colorMap, totalPixels) {
+            colorPalette.innerHTML = '';
+            const colors = [];
+             for (let r = 0; r < 256; r += 16) {
+                for (let g = 0; g < 256; g += 16) {
+                    for (let b = 0; b < 256; b += 16) {
+                         colors.push({r,g,b, name: `(${r},${g},${b})`});
+                    }
+                }
+            }
+            if (Object.keys(colorMap).length > 256) {
+                console.warn("Image has more than 256 unique colors. Displaying a maximum of 256.");
+            }
+            let i = 0;
+            for (let key in colorMap) {
+                if (i >= 256) break;
+                const color = colorMap[key];
+                const div = document.createElement('div');
+                div.className = 'flex flex-col items-center';
+                const swatch = document.createElement('div');
+                swatch.className = 'w-6 h-6 rounded shadow-sm';
+                swatch.style.backgroundColor = `rgb(${color.r},${color.g},${color.b})`;
+                const label = document.createElement('div');
+                label.className = 'text-xs text-center text-gray-600 mt-1';
+                label.textContent = `${((color.count / totalPixels) * 100).toFixed(1)}%`;
+                div.appendChild(swatch);
+                div.appendChild(label);
+                colorPalette.appendChild(div);
+                i++;
+            }
+        }
+    </script>
+</body>
+</html>
