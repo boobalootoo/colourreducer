@@ -1,0 +1,358 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Image Color Reduction</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+    <style>
+      body {
+        font-family: 'Roboto', sans-serif;
+      }
+      .title-gradient {
+        background: linear-gradient(to right, #6b7280, #374151); /* Gray shades */
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+      }
+      .hidden {
+        display: none;
+      }
+      .visible {
+        display: flex;
+      }
+    </style>
+</head>
+<body class="bg-gray-100 p-8">
+    <div class="container mx-auto p-8 bg-white rounded-lg shadow-md">
+        <h1 class="text-3xl font-bold mb-6 text-center title-gradient">Image Color Reduction</h1>
+        <div class="mb-6">
+            <label for="imageUpload" class="inline-flex items-center justify-center px-5 py-3 bg-gray-200 text-gray-700 font-medium rounded-md shadow-md cursor-pointer hover:bg-gray-300 focus:outline-none focus:ring-2 focus:ring-gray-400 focus:ring-opacity-75 transition-colors">
+                <i class="material-icons mr-2">upload</i>
+                <span>Upload Image</span>
+                <input type="file" id="imageUpload" accept="image/*" class="hidden">
+            </label>
+            <p id="file-name" class="mt-2 text-sm text-gray-500"></p>
+            <div class="flex items-center justify-center mt-4">
+                <div id="image-preview-container" class="hidden">
+                    <img id="image-preview" src="#" alt="Uploaded Image" class="max-w-full rounded-md shadow-lg">
+                </div>
+            </div>
+        </div>
+
+        <div id="slider-container" class="mb-6 hidden">
+            <label for="colorSlider" class="block text-gray-700 font-semibold mb-2">Number of Colors:</label>
+            <input type="range" id="colorSlider" min="1" max="256" value="256" class="w-full">
+            <p id="colorCount" class="text-center text-gray-600 mt-2">256 Colors</p>
+        </div>
+
+        <div id="method-container" class="mb-6 hidden">
+            <label for="quantizationMethod" class="block text-gray-700 font-semibold mb-2">Quantization Method:</label>
+            <select id="quantizationMethod" class="shadow appearance-none border rounded w-full py-3 px-4 text-gray-700 leading-tight focus:outline-none focus:shadow-outline">
+                <option value="basic">Basic</option>
+                <option value="octree">Octree</option>
+            </select>
+        </div>
+
+        <div class="flex items-center justify-center mt-6">
+            <div id="result-container" class="hidden">
+                <h2 class="text-2xl font-semibold mb-4 text-center text-gray-800">Result</h2>
+                <canvas id="resultCanvas" class="max-w-full rounded-md shadow-lg"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    const imageUpload = document.getElementById('imageUpload');
+    const imagePreview = document.getElementById('image-preview');
+    const imagePreviewContainer = document.getElementById('image-preview-container');
+    const fileNameDisplay = document.getElementById('file-name');
+    const sliderContainer = document.getElementById('slider-container');
+    const colorSlider = document.getElementById('colorSlider');
+    const colorCountDisplay = document.getElementById('colorCount');
+    const resultContainer = document.getElementById('result-container');
+    const resultCanvas = document.getElementById('resultCanvas');
+    const ctx = resultCanvas.getContext('2d');
+    const quantizationMethodSelect = document.getElementById('quantizationMethod');  // Get the select element
+    const methodContainer = document.getElementById('method-container');
+
+    let originalImage = new Image();
+    let originalColorCount = 0;
+    let quantizationMethod = 'basic'; // Default method
+
+    imageUpload.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        const reader = new FileReader();
+
+        fileNameDisplay.textContent = `Selected File: ${file.name}`;
+        sliderContainer.classList.remove('hidden');
+        imagePreviewContainer.classList.remove('hidden');
+        resultContainer.classList.add('hidden');
+        methodContainer.classList.remove('hidden'); // Show the method dropdown
+
+        reader.onload = function(event) {
+            originalImage.onload = function() {
+                // Check if image dimensions are valid before proceeding.
+                if (originalImage.width > 0 && originalImage.height > 0) {
+                    originalColorCount = getColorCount(originalImage);
+                    colorSlider.max = originalColorCount;
+                    colorSlider.value = originalColorCount;
+                    colorCountDisplay.textContent = `${originalColorCount} Colors`;
+                    quantizationMethod = quantizationMethodSelect.value; // Get selected method
+                    reduceColors(originalImage, originalColorCount, quantizationMethod);
+                } else {
+                    console.error("Image dimensions are invalid (width or height is 0).");
+                    // Handle the error appropriately, e.g., display a message to the user.
+                    fileNameDisplay.textContent = "Please upload a valid image."; // Clear previous file name
+                    sliderContainer.classList.add('hidden');
+                    imagePreviewContainer.classList.add('hidden');
+                    resultContainer.classList.add('hidden');
+                    methodContainer.classList.add('hidden');
+                    imagePreview.src = ''; // Clear the image preview
+                }
+            };
+            originalImage.src = event.target.result;
+            imagePreview.src = event.target.result;
+        }
+        reader.readAsDataURL(file);
+    });
+
+    colorSlider.addEventListener('input', function() {
+        const numColors = parseInt(colorSlider.value);
+        colorCountDisplay.textContent = `${numColors} Colors`;
+        quantizationMethod = quantizationMethodSelect.value; // Get selected method
+        reduceColors(originalImage, numColors, quantizationMethod);
+    });
+
+    quantizationMethodSelect.addEventListener('change', function() {
+        quantizationMethod = quantizationMethodSelect.value; // Update on dropdown change
+        const numColors = parseInt(colorSlider.value);
+        reduceColors(originalImage, numColors, quantizationMethod);
+    });
+
+    function getColorCount(img) {
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        context.drawImage(img, 0, 0, img.width, img.height);
+        const imageData = context.getImageData(0, 0, img.width, img.height).data;
+        const colors = new Set();
+        for (let i = 0; i < imageData.length; i += 4) {
+            const r = imageData[i];
+            const g = imageData[i + 1];
+            const b = imageData[i + 2];
+            const color = (r << 16) | (g << 8) | b;
+            colors.add(color);
+        }
+        return colors.size;
+    }
+
+    function reduceColors(img, numColors, method) {
+        // Check if the image has valid dimensions before proceeding.
+        if (img.width <= 0 || img.height <= 0) {
+            console.error("Image dimensions are invalid (width or height is 0). Cannot reduce colors.");
+            return; // Exit the function to prevent errors.
+        }
+
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        context.drawImage(img, 0, 0, img.width, img.height);
+
+        try {
+            const imageData = context.getImageData(0, 0, img.width, img.height).data;
+            let reducedPalette;
+
+            if (method === 'octree') {
+                reducedPalette = octreeQuantization(imageData, numColors);
+            } else { // Default to basic method
+                reducedPalette = getPalette(imageData, numColors);
+            }
+
+
+            for (let i = 0; i < imageData.length; i += 4) {
+                const r = imageData[i];
+                const g = imageData[i + 1];
+                const b = imageData[i + 2];
+                const closestColor = findClosestColor(r, g, b, reducedPalette);
+
+                imageData[i] = closestColor[0];
+                imageData[i + 1] = closestColor[1];
+                imageData[i + 2] = closestColor[2];
+            }
+
+            resultCanvas.width = img.width;
+            resultCanvas.height = img.height;
+            ctx.putImageData(new ImageData(imageData, img.width, img.height), 0, 0);
+            resultContainer.classList.remove('hidden');
+        } catch (error) {
+            console.error("Error processing image data:", error);
+            // Handle the error, e.g., display a message to the user.
+            resultContainer.classList.add('hidden'); // Hide result on error
+            // Consider showing an error message to the user in the UI.
+        }
+    }
+
+    function getPalette(data, numColors) {
+        const colorCounts = {};
+        for (let i = 0; i < data.length; i += 4) {
+            const r = data[i];
+            const g = data[i + 1];
+            const b = data[i + 2];
+            const color = (r << 16) | (g << 8) | b;
+            colorCounts[color] = (colorCounts[color] || 0) + 1;
+        }
+
+        const sortedColors = Object.entries(colorCounts).sort(([, countA], [, countB]) => countB - countA);
+        const palette = [];
+        for (let i = 0; i < Math.min(numColors, sortedColors.length); i++) {
+            const color = parseInt(sortedColors[i][0]);
+            const r = (color >> 16) & 255;
+            const g = (color >> 8) & 255;
+            const b = color & 255;
+            palette.push([r, g, b]);
+        }
+        return palette;
+    }
+
+    function findClosestColor(r, g, b, palette) {
+        let closestDistance = Infinity;
+        let closestColor = [0, 0, 0];
+        for (const color of palette) {
+            const distance = Math.sqrt(
+                Math.pow(r - color[0], 2) +
+                Math.pow(g - color[1], 2) +
+                Math.pow(b - color[2], 2)
+            );
+            if (distance < closestDistance) {
+                closestDistance = distance;
+                closestColor = color;
+            }
+        }
+        return closestColor;
+    }
+
+
+
+    // Octree Quantization Implementation
+    class OctreeNode {
+        constructor() {
+            this.children = [];
+            this.pixelCount = 0;
+            this.redSum = 0;
+            this.greenSum = 0;
+            this.blueSum = 0;
+            this.isLeaf = true;
+        }
+
+        getIndex(r, g, b, level) {
+            const bit = 7 - level;
+            let index = 0;
+            if ((r >> bit) & 1) index |= 4;
+            if ((g >> bit) & 1) index |= 2;
+            if ((b >> bit) & 1) index |= 1;
+            return index;
+        }
+
+        insert(r, g, b, level) {
+            if (level < 8) {
+                const index = this.getIndex(r, g, b, level);
+                if (!this.children[index]) {
+                    this.children[index] = new OctreeNode();
+                }
+                this.isLeaf = false;
+                this.children[index].insert(r, g, b, level + 1);
+            } else {
+                this.pixelCount++;
+                this.redSum += r;
+                this.greenSum += g;
+                this.blueSum += b;
+            }
+        }
+
+        getColor() {
+            return [
+                this.redSum / this.pixelCount,
+                this.greenSum / this.pixelCount,
+                this.blueSum / this.pixelCount
+            ];
+        }
+
+        reduce() {
+            if (this.isLeaf) return;
+
+            let childrenCount = 0;
+            for (let i = 0; i < 8; i++) {
+                if (this.children[i]) {
+                    childrenCount++;
+                }
+            }
+
+            if (childrenCount === 0) return;
+
+            if (childrenCount > 0) { // Corrected condition
+                for (let i = 0; i < 8; i++) {
+                  if (this.children[i]) {
+                    this.children[i].reduce();
+                 }
+                }
+            }
+        }
+    }
+
+    function octreeQuantization(data, numColors) {
+        const root = new OctreeNode();
+        const colorCount = data.length / 4;
+
+        for (let i = 0; i < colorCount; i++) {
+            const r = data[i * 4];
+            const g = data[i * 4 + 1];
+            const b = data[i * 4 + 2];
+            root.insert(r, g, b, 0);
+        }
+
+        let paletteSize = 0;
+        while (paletteSize < numColors) {
+             root.reduce();
+             paletteSize = getLeafCount(root);
+        }
+       
+        const palette = [];
+        getPaletteColors(root, palette);
+        return palette;
+    }
+
+    function getLeafCount(node) {
+        if (node.isLeaf) {
+            return 1;
+        }
+        let count = 0;
+        for (let i = 0; i < 8; i++) {
+            if (node.children[i]) {
+                count += getLeafCount(node.children[i]);
+            }
+        }
+        return count;
+    }
+
+
+    function getPaletteColors(node, palette) {
+        if (node.isLeaf) {
+            if (node.pixelCount > 0) { // Only add if it has pixels
+                palette.push(node.getColor());
+            }
+        } else {
+            for (let i = 0; i < 8; i++) {
+                if (node.children[i]) {
+                    getPaletteColors(node.children[i], palette);
+                }
+            }
+        }
+    }
+    </script>
+</body>
+</html>
